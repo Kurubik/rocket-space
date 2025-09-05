@@ -45,7 +45,7 @@ gameState.terrain = generateTerrain();
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
-  const playerColors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffa726', '#ab47bc'];
+  const playerColors = ['#ff3c38', '#ff8c42', '#fff275', '#28c76f', '#0099ff', '#7b2ff7', '#ff595e', '#ffca3a', '#8ac926', '#1982c4', '#6a4c93', '#ff924c','#ff2e63', '#08d9d6', '#f8f3d4', '#252a34', '#eaeaea', '#845ec2'];
   const colorIndex = Object.keys(gameState.players).length % playerColors.length;
 
   gameState.players[socket.id] = {

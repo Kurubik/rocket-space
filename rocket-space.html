@@ -68,9 +68,34 @@
       text-shadow: 0 0 20px #0ff;
       display: none;
     }
+    #restartBtn {
+      position: absolute;
+      top: 60%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 15px 30px;
+      background: rgba(0, 255, 255, 0.1);
+      border: 2px solid #0ff;
+      border-radius: 10px;
+      color: #0ff;
+      font-size: 18px;
+      font-family: 'Courier New', monospace;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s;
+      display: none;
+      text-shadow: 0 0 10px #0ff;
+    }
+    #restartBtn:active {
+      background: rgba(0, 255, 255, 0.3);
+      transform: translate(-50%, -50%) scale(0.95);
+    }
     @media (min-width: 768px) {
       #controls {
         display: none;
+      }
+      #restartBtn {
+        display: none !important;
       }
     }
   </style>
@@ -88,6 +113,7 @@
   <div class="control-btn" id="rightBtn">►</div>
 </div>
 <div id="message"></div>
+<button id="restartBtn">RESTART</button>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -294,6 +320,13 @@
   document.getElementById('rightBtn').addEventListener('mouseup', () => touchControls.right = false);
   document.getElementById('thrustBtn').addEventListener('mousedown', () => touchControls.thrust = true);
   document.getElementById('thrustBtn').addEventListener('mouseup', () => touchControls.thrust = false);
+  
+  // Restart button for mobile
+  document.getElementById('restartBtn').addEventListener('click', resetGame);
+  document.getElementById('restartBtn').addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    resetGame();
+  });
 
   function resetGame() {
     gameState = {
@@ -305,6 +338,7 @@
       won: false
     };
     document.getElementById('message').style.display = 'none';
+    document.getElementById('restartBtn').style.display = 'none';
     particles.forEach(p => scene.remove(p.mesh));
     particles.length = 0;
     generateTerrain();
@@ -321,10 +355,12 @@
       if (speed < 2 && Math.abs(gameState.rotation) < 0.2) {
         gameState.won = true;
         gameState.gameOver = true;
-        showMessage("PERFECT LANDING!<br>Press SPACE to play again");
+        const message = window.innerWidth < 768 ? "PERFECT LANDING!" : "PERFECT LANDING!<br>Press SPACE to play again";
+        showMessage(message);
       } else {
         gameState.gameOver = true;
-        showMessage("TOO FAST!<br>Press SPACE to play again");
+        const message = window.innerWidth < 768 ? "TOO FAST!" : "TOO FAST!<br>Press SPACE to play again";
+        showMessage(message);
         createExplosion();
       }
       return true;
@@ -341,7 +377,8 @@
 
         if (rocketBottom <= terrainY) {
           gameState.gameOver = true;
-          showMessage("CRASH!<br>Press SPACE to play again");
+          const message = window.innerWidth < 768 ? "CRASH!" : "CRASH!<br>Press SPACE to play again";
+          showMessage(message);
           createExplosion();
           return true;
         }
@@ -368,6 +405,12 @@
     const messageEl = document.getElementById('message');
     messageEl.innerHTML = text;
     messageEl.style.display = 'block';
+    
+    // Show restart button on mobile devices
+    const restartBtn = document.getElementById('restartBtn');
+    if (window.innerWidth < 768) {
+      restartBtn.style.display = 'block';
+    }
   }
 
   function update(deltaTime) {
@@ -433,7 +476,8 @@
       gameState.velocity.y = Math.min(gameState.velocity.y, 0);
     } else if (gameState.position.y < -10) {
       gameState.gameOver = true;
-      showMessage("CRASHED!<br>Press SPACE to play again");
+      const message = window.innerWidth < 768 ? "CRASHED!" : "CRASHED!<br>Press SPACE to play again";
+      showMessage(message);
     }
 
     // Check collision

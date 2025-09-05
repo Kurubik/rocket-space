@@ -109,9 +109,34 @@
       font-size: 14px;
       text-shadow: 0 0 10px #0ff;
     }
+    #restartBtn {
+      position: absolute;
+      top: 60%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 15px 30px;
+      background: rgba(0, 255, 255, 0.1);
+      border: 2px solid #0ff;
+      border-radius: 10px;
+      color: #0ff;
+      font-size: 18px;
+      font-family: 'Courier New', monospace;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s;
+      display: none;
+      text-shadow: 0 0 10px #0ff;
+    }
+    #restartBtn:active {
+      background: rgba(0, 255, 255, 0.3);
+      transform: translate(-50%, -50%) scale(0.95);
+    }
     @media (min-width: 768px) {
       #controls {
         display: none;
+      }
+      #restartBtn {
+        display: none !important;
       }
     }
   </style>
@@ -137,6 +162,7 @@
   <div class="game-btn" id="newLevelBtn">NEW LEVEL</div>
 </div>
 <div id="message"></div>
+<button id="restartBtn">RESTART</button>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
@@ -329,6 +355,31 @@
   function checkCollision() {
     const rocketBottom = myGameState.position.y - 0.5;
 
+    // Check collision with other rockets
+    Object.keys(allPlayers).forEach(playerId => {
+      if (playerId !== myPlayerId) { // Don't check collision with self
+        const otherPlayer = allPlayers[playerId];
+        if (!otherPlayer.gameOver && !myGameState.gameOver) { // Only check if both players are still alive
+          // Calculate distance between rockets (simple circle collision detection)
+          const dx = myGameState.position.x - otherPlayer.position.x;
+          const dy = myGameState.position.y - otherPlayer.position.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          // If rockets are too close (collision radius of about 0.8 units)
+          if (distance < 0.8) {
+            myGameState.gameOver = true;
+            const message = window.innerWidth < 768 ? "COLLISION!" : "COLLISION!<br>Press SPACE to restart";
+            showMessage(message);
+            createExplosion();
+            
+            // Send update to server so other players know we crashed
+            socket.emit('playerUpdate', myGameState);
+            return true;
+          }
+        }
+      }
+    });
+
     // Check landing pad
     if (Math.abs(myGameState.position.x - padX) < padWidth/2 &&
             rocketBottom <= padY + 0.1 && rocketBottom >= padY - 0.1) {
@@ -337,10 +388,12 @@
       if (speed < 2 && Math.abs(myGameState.rotation) < 0.2) {
         myGameState.won = true;
         myGameState.gameOver = true;
-        showMessage("PERFECT LANDING!<br>Press SPACE to restart");
+        const message = window.innerWidth < 768 ? "PERFECT LANDING!" : "PERFECT LANDING!<br>Press SPACE to restart";
+        showMessage(message);
       } else {
         myGameState.gameOver = true;
-        showMessage("TOO FAST!<br>Press SPACE to restart");
+        const message = window.innerWidth < 768 ? "TOO FAST!" : "TOO FAST!<br>Press SPACE to restart";
+        showMessage(message);
         createExplosion();
       }
       return true;
@@ -357,7 +410,8 @@
 
         if (rocketBottom <= terrainY) {
           myGameState.gameOver = true;
-          showMessage("CRASH!<br>Press SPACE to restart");
+          const message = window.innerWidth < 768 ? "CRASH!" : "CRASH!<br>Press SPACE to restart";
+          showMessage(message);
           createExplosion();
           return true;
         }
@@ -385,10 +439,17 @@
     const messageEl = document.getElementById('message');
     messageEl.innerHTML = text;
     messageEl.style.display = 'block';
+    
+    // Show restart button on mobile devices
+    const restartBtn = document.getElementById('restartBtn');
+    if (window.innerWidth < 768) {
+      restartBtn.style.display = 'block';
+    }
   }
 
   function hideMessage() {
     document.getElementById('message').style.display = 'none';
+    document.getElementById('restartBtn').style.display = 'none';
   }
 
   function resetMyPlayer() {
@@ -468,7 +529,8 @@
       myGameState.velocity.y = Math.min(myGameState.velocity.y, 0);
     } else if (myGameState.position.y < -10) {
       myGameState.gameOver = true;
-      showMessage("CRASHED!<br>Press SPACE to restart");
+      const message = window.innerWidth < 768 ? "CRASHED!" : "CRASHED!<br>Press SPACE to restart";
+      showMessage(message);
     }
 
     // Check collision
@@ -482,6 +544,57 @@
 
     // Update particles
     particles.forEach(p => p.update(deltaTime));
+
+    // Update all rocket positions and check for proximity warnings
+    Object.keys(allPlayers).forEach(playerId => {
+      if (rockets[playerId]) {
+        // Update rocket position
+        if (playerId === myPlayerId) {
+          // Use my local game state for smoother movement
+          rockets[playerId].position.set(myGameState.position.x, myGameState.position.y, 0);
+          rockets[playerId].rotation.z = myGameState.rotation;
+        } else if (allPlayers[playerId]) {
+          // Use server state for other players
+          const player = allPlayers[playerId];
+          rockets[playerId].position.set(player.position.x, player.position.y, 0);
+          rockets[playerId].rotation.z = player.rotation;
+        }
+        
+        // Add proximity warning effect for my rocket only
+        if (playerId === myPlayerId && !myGameState.gameOver) {
+          let tooClose = false;
+          
+          // Check distance to other players for warning effect
+          Object.keys(allPlayers).forEach(otherPlayerId => {
+            if (otherPlayerId !== myPlayerId && !allPlayers[otherPlayerId].gameOver) {
+              const other = allPlayers[otherPlayerId];
+              const dx = myGameState.position.x - other.position.x;
+              const dy = myGameState.position.y - other.position.y;
+              const distance = Math.sqrt(dx * dx + dy * dy);
+              
+              // Warning zone: 1.5 units (collision at 0.8)
+              if (distance < 1.5) {
+                tooClose = true;
+              }
+            }
+          });
+          
+          // Flash the rocket body when too close
+          if (tooClose && rockets[playerId].children[0]) {
+            const flashIntensity = Math.sin(Date.now() * 0.01) * 0.5 + 0.5;
+            rockets[playerId].children[0].material.color.setRGB(
+              1, 
+              flashIntensity, 
+              flashIntensity
+            );
+          } else if (rockets[playerId].children[0]) {
+            // Reset to normal color
+            const color = new THREE.Color(allPlayers[playerId].color);
+            rockets[playerId].children[0].material.color = color;
+          }
+        }
+      }
+    });
 
     // Send my state to server
     socket.emit('playerUpdate', myGameState);
@@ -601,6 +714,13 @@
   document.getElementById('rightBtn').addEventListener('mouseup', () => touchControls.right = false);
   document.getElementById('thrustBtn').addEventListener('mousedown', () => touchControls.thrust = true);
   document.getElementById('thrustBtn').addEventListener('mouseup', () => touchControls.thrust = false);
+  
+  // Restart button for mobile
+  document.getElementById('restartBtn').addEventListener('click', resetMyPlayer);
+  document.getElementById('restartBtn').addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    resetMyPlayer();
+  });
 
   // New level button
   document.getElementById('newLevelBtn').addEventListener('click', () => {
@@ -618,22 +738,6 @@
     lastTime = currentTime;
 
     update(deltaTime);
-
-    // Update all rocket positions
-    Object.keys(allPlayers).forEach(playerId => {
-      if (rockets[playerId]) {
-        if (playerId === myPlayerId) {
-          // Update my own rocket with my game state
-          rockets[playerId].position.set(myGameState.position.x, myGameState.position.y, 0);
-          rockets[playerId].rotation.z = myGameState.rotation;
-        } else if (allPlayers[playerId]) {
-          // Update other players' rockets with their states
-          const player = allPlayers[playerId];
-          rockets[playerId].position.set(player.position.x, player.position.y, 0);
-          rockets[playerId].rotation.z = player.rotation;
-        }
-      }
-    });
 
     renderer.render(scene, camera);
   }
