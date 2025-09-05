@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Lunar Lander</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+      background: #000;
+      touch-action: none;
+    }
+    #gameCanvas {
+      display: block;
+      cursor: crosshair;
+    }
+    #ui {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: #0ff;
+      font-size: 14px;
+      text-shadow: 0 0 10px #0ff;
+      pointer-events: none;
+    }
+    #controls {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      opacity: 0.7;
+    }
+    .control-btn {
+      width: 60px;
+      height: 60px;
+      background: rgba(0, 255, 255, 0.1);
+      border: 2px solid #0ff;
+      border-radius: 50%;
+      color: #0ff;
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s;
+    }
+    .control-btn:active {
+      background: rgba(0, 255, 255, 0.3);
+      transform: scale(0.95);
+    }
+    #message {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 32px;
+      color: #0ff;
+      text-align: center;
+      text-shadow: 0 0 20px #0ff;
+      display: none;
+    }
+    @media (min-width: 768px) {
+      #controls {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui">
+  <div>FUEL: <span id="fuel">100</span>%</div>
+  <div>VELOCITY: <span id="velocity">0</span> m/s</div>
+  <div>ALTITUDE: <span id="altitude">0</span> m</div>
+</div>
+<div id="controls">
+  <div class="control-btn" id="leftBtn">◄</div>
+  <div class="control-btn" id="thrustBtn">▲</div>
+  <div class="control-btn" id="rightBtn">►</div>
+</div>
+<div id="message"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+  // Game setup
+  const canvas = document.getElementById('gameCanvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000814);
+
+  // Camera setup
+  const aspect = window.innerWidth / window.innerHeight;
+  const frustumSize = 20;
+  const camera = new THREE.OrthographicCamera(
+          frustumSize * aspect / -2,
+          frustumSize * aspect / 2,
+          frustumSize / 2,
+          frustumSize / -2,
+          0.1,
+          1000
+  );
+  camera.position.z = 10;
+
+  // Add stars background
+  const starsGeometry = new THREE.BufferGeometry();
+  const starCount = 200;
+  const starPositions = [];
+  for (let i = 0; i < starCount; i++) {
+    starPositions.push(
+            (Math.random() - 0.5) * 50,
+            (Math.random() - 0.5) * 30,
+            -5
+    );
+  }
+  starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
+  const starsMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.1 });
+  const stars = new THREE.Points(starsGeometry, starsMaterial);
+  scene.add(stars);
+
+  // Rocket setup
+  const rocket = new THREE.Group();
+
+  // Rocket body
+  const bodyGeometry = new THREE.BufferGeometry();
+  const bodyVertices = new Float32Array([
+    0, 0.8, 0,      // top
+    -0.3, -0.5, 0,  // bottom left
+    0.3, -0.5, 0,   // bottom right
+  ]);
+  bodyGeometry.setAttribute('position', new THREE.BufferAttribute(bodyVertices, 3));
+  const bodyMaterial = new THREE.MeshBasicMaterial({ color: 0xff6b6b });
+  const rocketBody = new THREE.Mesh(bodyGeometry, bodyMaterial);
+  rocket.add(rocketBody);
+
+  // Rocket fins
+  const finGeometry = new THREE.PlaneGeometry(0.2, 0.3);
+  const finMaterial = new THREE.MeshBasicMaterial({ color: 0x4ecdc4 });
+  const leftFin = new THREE.Mesh(finGeometry, finMaterial);
+  leftFin.position.set(-0.25, -0.3, 0);
+  rocket.add(leftFin);
+  const rightFin = new THREE.Mesh(finGeometry, finMaterial);
+  rightFin.position.set(0.25, -0.3, 0);
+  rocket.add(rightFin);
+
+  scene.add(rocket);
+
+  // Terrain and landing pad variables
+  let terrainPoints = [];
+  let terrain, landingPad, leftMarker, rightMarker;
+  let padWidth = 2;
+  let padX, padY;
+
+  function generateTerrain() {
+    // Remove existing terrain and landing pad
+    if (terrain) scene.remove(terrain);
+    if (landingPad) scene.remove(landingPad);
+    if (leftMarker) scene.remove(leftMarker);
+    if (rightMarker) scene.remove(rightMarker);
+
+    // Generate new terrain points
+    terrainPoints = [];
+    const terrainSegments = 50;
+    for (let i = 0; i <= terrainSegments; i++) {
+      const x = (i / terrainSegments) * 40 - 20;
+      const y = -8 + Math.sin(i * 0.3 + Math.random() * 2) * 2 + Math.random() * 1;
+      terrainPoints.push(new THREE.Vector2(x, y));
+    }
+
+    // Create terrain mesh
+    const terrainShape = new THREE.Shape();
+    terrainShape.moveTo(terrainPoints[0].x, terrainPoints[0].y);
+    for (let i = 1; i < terrainPoints.length; i++) {
+      terrainShape.lineTo(terrainPoints[i].x, terrainPoints[i].y);
+    }
+    terrainShape.lineTo(20, -15);
+    terrainShape.lineTo(-20, -15);
+    terrainShape.closePath();
+
+    const terrainGeometry = new THREE.ShapeGeometry(terrainShape);
+    const terrainMaterial = new THREE.MeshBasicMaterial({ color: 0x95a99c });
+    terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
+    scene.add(terrain);
+
+    // Generate new landing pad position - find a suitable terrain point
+    const padIndex = Math.floor(Math.random() * (terrainPoints.length - 5)) + 2; // Avoid edges
+    padX = terrainPoints[padIndex].x;
+    
+    // Find the terrain height at this x position and place pad on top
+    let terrainHeight = terrainPoints[padIndex].y;
+    // Make sure we find the highest point in a small area for a flat landing
+    for (let i = Math.max(0, padIndex - 2); i <= Math.min(terrainPoints.length - 1, padIndex + 2); i++) {
+      terrainHeight = Math.max(terrainHeight, terrainPoints[i].y);
+    }
+    padY = terrainHeight + 0.1;
+
+    const padGeometry = new THREE.PlaneGeometry(padWidth, 0.2);
+    const padMaterial = new THREE.MeshBasicMaterial({ color: 0xffd60a });
+    landingPad = new THREE.Mesh(padGeometry, padMaterial);
+    landingPad.position.set(padX, padY, 0.1);
+    scene.add(landingPad);
+
+    // Add landing pad markers
+    const markerGeometry = new THREE.PlaneGeometry(0.1, 0.5);
+    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    leftMarker = new THREE.Mesh(markerGeometry, markerMaterial);
+    leftMarker.position.set(padX - padWidth/2, padY + 0.3, 0.1);
+    scene.add(leftMarker);
+    rightMarker = new THREE.Mesh(markerGeometry, markerMaterial);
+    rightMarker.position.set(padX + padWidth/2, padY + 0.3, 0.1);
+    scene.add(rightMarker);
+  }
+
+  // Generate initial terrain
+  generateTerrain();
+
+  // Particle system for thrust
+  const particles = [];
+  class Particle {
+    constructor(x, y, vx, vy) {
+      this.geometry = new THREE.CircleGeometry(0.05, 6);
+      this.material = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(1, Math.random() * 0.5 + 0.5, 0),
+        transparent: true
+      });
+      this.mesh = new THREE.Mesh(this.geometry, this.material);
+      this.mesh.position.set(x, y, 0);
+      this.velocity = { x: vx, y: vy };
+      this.life = 1;
+      scene.add(this.mesh);
+      particles.push(this);
+    }
+
+    update(deltaTime) {
+      this.mesh.position.x += this.velocity.x * deltaTime;
+      this.mesh.position.y += this.velocity.y * deltaTime;
+      this.life -= deltaTime * 3;
+      this.material.opacity = this.life;
+
+      if (this.life <= 0) {
+        scene.remove(this.mesh);
+        const index = particles.indexOf(this);
+        if (index > -1) particles.splice(index, 1);
+      }
+    }
+  }
+
+  // Game state
+  let gameState = {
+    position: { x: 0, y: 5 },
+    velocity: { x: 0, y: 0 },
+    rotation: 0,
+    fuel: 100,
+    gameOver: false,
+    won: false
+  };
+
+  // Controls
+  const keys = {};
+  let touchControls = { left: false, right: false, thrust: false };
+
+  window.addEventListener('keydown', (e) => {
+    keys[e.key] = true;
+    if (e.key === ' ') e.preventDefault();
+  });
+
+  window.addEventListener('keyup', (e) => {
+    keys[e.key] = false;
+  });
+
+  // Mobile controls
+  document.getElementById('leftBtn').addEventListener('touchstart', () => touchControls.left = true);
+  document.getElementById('leftBtn').addEventListener('touchend', () => touchControls.left = false);
+  document.getElementById('rightBtn').addEventListener('touchstart', () => touchControls.right = true);
+  document.getElementById('rightBtn').addEventListener('touchend', () => touchControls.right = false);
+  document.getElementById('thrustBtn').addEventListener('touchstart', () => touchControls.thrust = true);
+  document.getElementById('thrustBtn').addEventListener('touchend', () => touchControls.thrust = false);
+
+  // Mouse controls for desktop
+  document.getElementById('leftBtn').addEventListener('mousedown', () => touchControls.left = true);
+  document.getElementById('leftBtn').addEventListener('mouseup', () => touchControls.left = false);
+  document.getElementById('rightBtn').addEventListener('mousedown', () => touchControls.right = true);
+  document.getElementById('rightBtn').addEventListener('mouseup', () => touchControls.right = false);
+  document.getElementById('thrustBtn').addEventListener('mousedown', () => touchControls.thrust = true);
+  document.getElementById('thrustBtn').addEventListener('mouseup', () => touchControls.thrust = false);
+
+  function resetGame() {
+    gameState = {
+      position: { x: (Math.random() - 0.5) * 10, y: 5 },
+      velocity: { x: (Math.random() - 0.5) * 2, y: 0 },
+      rotation: 0,
+      fuel: 100,
+      gameOver: false,
+      won: false
+    };
+    document.getElementById('message').style.display = 'none';
+    particles.forEach(p => scene.remove(p.mesh));
+    particles.length = 0;
+    generateTerrain();
+  }
+
+  function checkCollision() {
+    const rocketBottom = gameState.position.y - 0.5;
+
+    // Check landing pad
+    if (Math.abs(gameState.position.x - padX) < padWidth/2 &&
+            rocketBottom <= padY + 0.1 && rocketBottom >= padY - 0.1) {
+
+      const speed = Math.sqrt(gameState.velocity.x ** 2 + gameState.velocity.y ** 2);
+      if (speed < 2 && Math.abs(gameState.rotation) < 0.2) {
+        gameState.won = true;
+        gameState.gameOver = true;
+        showMessage("PERFECT LANDING!<br>Press SPACE to play again");
+      } else {
+        gameState.gameOver = true;
+        showMessage("TOO FAST!<br>Press SPACE to play again");
+        createExplosion();
+      }
+      return true;
+    }
+
+    // Check terrain collision
+    for (let i = 0; i < terrainPoints.length - 1; i++) {
+      const p1 = terrainPoints[i];
+      const p2 = terrainPoints[i + 1];
+
+      if (gameState.position.x >= p1.x && gameState.position.x <= p2.x) {
+        const t = (gameState.position.x - p1.x) / (p2.x - p1.x);
+        const terrainY = p1.y + t * (p2.y - p1.y);
+
+        if (rocketBottom <= terrainY) {
+          gameState.gameOver = true;
+          showMessage("CRASH!<br>Press SPACE to play again");
+          createExplosion();
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  function createExplosion() {
+    for (let i = 0; i < 30; i++) {
+      const angle = (Math.PI * 2 * i) / 30;
+      const speed = Math.random() * 5 + 2;
+      new Particle(
+              gameState.position.x,
+              gameState.position.y,
+              Math.cos(angle) * speed,
+              Math.sin(angle) * speed
+      );
+    }
+  }
+
+  function showMessage(text) {
+    const messageEl = document.getElementById('message');
+    messageEl.innerHTML = text;
+    messageEl.style.display = 'block';
+  }
+
+  function update(deltaTime) {
+    if (gameState.gameOver) {
+      if (keys[' '] || keys['Enter']) {
+        resetGame();
+      }
+      return;
+    }
+
+    // Handle input
+    if ((keys['ArrowLeft'] || keys['a'] || touchControls.left) && gameState.fuel > 0) {
+      gameState.rotation += deltaTime * 3;  // A key rotates counter-clockwise
+      gameState.fuel -= deltaTime * 5;
+    }
+    if ((keys['ArrowRight'] || keys['d'] || touchControls.right) && gameState.fuel > 0) {
+      gameState.rotation -= deltaTime * 3;  // D key rotates clockwise
+      gameState.fuel -= deltaTime * 5;
+    }
+    if ((keys['ArrowUp'] || keys['w'] || keys[' '] || touchControls.thrust) && gameState.fuel > 0) {
+      const thrust = 8;
+      gameState.velocity.x -= Math.sin(gameState.rotation) * thrust * deltaTime;  // Changed from += to -=
+      gameState.velocity.y += Math.cos(gameState.rotation) * thrust * deltaTime;
+      gameState.fuel -= deltaTime * 20;
+
+      // Create thrust particles
+      if (Math.random() < 0.8) {
+        const spreadAngle = (Math.random() - 0.5) * 0.5;
+        new Particle(
+                gameState.position.x + Math.sin(gameState.rotation) * 0.5,  // Changed from - to +
+                gameState.position.y - Math.cos(gameState.rotation) * 0.5,
+                Math.sin(gameState.rotation + spreadAngle) * 3,  // Changed from - to no minus
+                -Math.cos(gameState.rotation + spreadAngle) * 3
+        );
+      }
+    }
+
+    // Apply gravity
+    gameState.velocity.y -= 2 * deltaTime;
+
+    // Update position
+    gameState.position.x += gameState.velocity.x * deltaTime;
+    gameState.position.y += gameState.velocity.y * deltaTime;
+
+    // Screen wrapping - if rocket goes off one side, appear on the other
+    const screenBounds = frustumSize * aspect / 2;
+    if (gameState.position.x > screenBounds) {
+      gameState.position.x = -screenBounds;
+    } else if (gameState.position.x < -screenBounds) {
+      gameState.position.x = screenBounds;
+    }
+
+    // Clamp fuel
+    gameState.fuel = Math.max(0, gameState.fuel);
+
+    // Update rocket position
+    rocket.position.set(gameState.position.x, gameState.position.y, 0);
+    rocket.rotation.z = gameState.rotation;
+
+    // Check if rocket is too high or too low
+    if (gameState.position.y > 15) {
+      gameState.position.y = 15;
+      gameState.velocity.y = Math.min(gameState.velocity.y, 0);
+    } else if (gameState.position.y < -10) {
+      gameState.gameOver = true;
+      showMessage("CRASHED!<br>Press SPACE to play again");
+    }
+
+    // Check collision
+    checkCollision();
+
+    // Update UI
+    document.getElementById('fuel').textContent = Math.round(gameState.fuel);
+    const speed = Math.sqrt(gameState.velocity.x ** 2 + gameState.velocity.y ** 2);
+    document.getElementById('velocity').textContent = speed.toFixed(1);
+    document.getElementById('altitude').textContent = Math.max(0, gameState.position.y - padY).toFixed(1);
+
+    // Update particles
+    particles.forEach(p => p.update(deltaTime));
+  }
+
+  // Animation loop
+  let lastTime = 0;
+  function animate(currentTime) {
+    requestAnimationFrame(animate);
+
+    const deltaTime = Math.min((currentTime - lastTime) / 1000, 0.1);
+    lastTime = currentTime;
+
+    update(deltaTime);
+    renderer.render(scene, camera);
+  }
+
+  // Handle resize
+  window.addEventListener('resize', () => {
+    const aspect = window.innerWidth / window.innerHeight;
+    camera.left = frustumSize * aspect / -2;
+    camera.right = frustumSize * aspect / 2;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // Start game
+  resetGame();
+  animate(0);
+</script>
+</body>
+</html>
