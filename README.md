@@ -91,7 +91,38 @@ MIT License - see the code for details.
 
 ## Deployment
 
-The game is configured to use PORT environment variable for deployment platforms like Heroku, Railway, or similar. Default port is 3001.
+### Remote Server Deployment
+
+1. **Upload files** to your server
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+3. **Start the server**:
+   ```bash
+   node rocket-server.js
+   ```
+4. **Access the game** at:
+   ```
+   http://YOUR_SERVER_IP:3001/rocket-space.html
+   ```
+
+### Environment Variables
+
+- `PORT` - Server port (default: 3001)
+- `HOST` - Host binding (default: 0.0.0.0 for remote access)
+
+### Production Setup
+
+For production, consider using PM2:
+```bash
+npm install -g pm2
+pm2 start rocket-server.js --name rocket-space
+pm2 save
+pm2 startup
+```
+
+The game is configured to use PORT and HOST environment variables for deployment platforms like Heroku, Railway, or VPS servers.
 
 ---
 
