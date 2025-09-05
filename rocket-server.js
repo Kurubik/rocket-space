@@ -127,5 +127,5 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 server.listen(PORT, HOST, () => {
   console.log(`Multiplayer Rocket Game server running on ${HOST}:${PORT}`);
-  console.log(`Open http://localhost:${PORT}/rocket-space.html to play`);
+  console.log(`Open http://localhost:${PORT}/rocket-multiplayer.html to play`);
 });

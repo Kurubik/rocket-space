@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Multiplayer Lunar Lander</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+      background: #000;
+      touch-action: none;
+    }
+    #gameCanvas {
+      display: block;
+      cursor: crosshair;
+    }
+    #ui {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: #0ff;
+      font-size: 14px;
+      text-shadow: 0 0 10px #0ff;
+      pointer-events: none;
+    }
+    #playerList {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      color: #0ff;
+      font-size: 12px;
+      text-shadow: 0 0 10px #0ff;
+      pointer-events: none;
+    }
+    #controls {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      opacity: 0.7;
+    }
+    .control-btn {
+      width: 60px;
+      height: 60px;
+      background: rgba(0, 255, 255, 0.1);
+      border: 2px solid #0ff;
+      border-radius: 50%;
+      color: #0ff;
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s;
+    }
+    .control-btn:active {
+      background: rgba(0, 255, 255, 0.3);
+      transform: scale(0.95);
+    }
+    #gameControls {
+      position: absolute;
+      bottom: 100px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      opacity: 0.7;
+    }
+    .game-btn {
+      padding: 10px 20px;
+      background: rgba(0, 255, 255, 0.1);
+      border: 2px solid #0ff;
+      border-radius: 5px;
+      color: #0ff;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s;
+    }
+    .game-btn:hover {
+      background: rgba(0, 255, 255, 0.3);
+    }
+    #message {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 32px;
+      color: #0ff;
+      text-align: center;
+      text-shadow: 0 0 20px #0ff;
+      display: none;
+    }
+    #connectionStatus {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #0ff;
+      font-size: 14px;
+      text-shadow: 0 0 10px #0ff;
+    }
+    @media (min-width: 768px) {
+      #controls {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui">
+  <div>FUEL: <span id="fuel">100</span>%</div>
+  <div>VELOCITY: <span id="velocity">0</span> m/s</div>
+  <div>ALTITUDE: <span id="altitude">0</span> m</div>
+</div>
+<div id="playerList">
+  <div><strong>PLAYERS:</strong></div>
+  <div id="players"></div>
+</div>
+<div id="connectionStatus">Connecting...</div>
+<div id="controls">
+  <div class="control-btn" id="leftBtn">◄</div>
+  <div class="control-btn" id="thrustBtn">▲</div>
+  <div class="control-btn" id="rightBtn">►</div>
+</div>
+<div id="gameControls">
+  <div class="game-btn" id="newLevelBtn">NEW LEVEL</div>
+</div>
+<div id="message"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  // Socket connection
+  const socket = io();
+  let myPlayerId = null;
+  let allPlayers = {};
+  let gameInitialized = false;
+
+  // Game setup
+  const canvas = document.getElementById('gameCanvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000814);
+
+  // Camera setup
+  const aspect = window.innerWidth / window.innerHeight;
+  const frustumSize = 20;
+  const camera = new THREE.OrthographicCamera(
+          frustumSize * aspect / -2,
+          frustumSize * aspect / 2,
+          frustumSize / 2,
+          frustumSize / -2,
+          0.1,
+          1000
+  );
+  camera.position.z = 10;
+
+  // Add stars background
+  const starsGeometry = new THREE.BufferGeometry();
+  const starCount = 200;
+  const starPositions = [];
+  for (let i = 0; i < starCount; i++) {
+    starPositions.push(
+            (Math.random() - 0.5) * 50,
+            (Math.random() - 0.5) * 30,
+            -5
+    );
+  }
+  starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
+  const starsMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.1 });
+  const stars = new THREE.Points(starsGeometry, starsMaterial);
+  scene.add(stars);
+
+  // Game objects
+  let rockets = {};
+  let terrain, landingPad, leftMarker, rightMarker;
+  let terrainPoints = [];
+  let padX, padY, padWidth = 2;
+
+  // My player state
+  let myGameState = {
+    position: { x: 0, y: 5 },
+    velocity: { x: 0, y: 0 },
+    rotation: 0,
+    fuel: 100,
+    gameOver: false,
+    won: false
+  };
+
+  // Controls
+  const keys = {};
+  let touchControls = { left: false, right: false, thrust: false };
+
+  // Particle system for thrust
+  const particles = [];
+  class Particle {
+    constructor(x, y, vx, vy, color = 0xff6b00) {
+      this.geometry = new THREE.CircleGeometry(0.05, 6);
+      this.material = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(color),
+        transparent: true
+      });
+      this.mesh = new THREE.Mesh(this.geometry, this.material);
+      this.mesh.position.set(x, y, 0);
+      this.velocity = { x: vx, y: vy };
+      this.life = 1;
+      scene.add(this.mesh);
+      particles.push(this);
+    }
+
+    update(deltaTime) {
+      this.mesh.position.x += this.velocity.x * deltaTime;
+      this.mesh.position.y += this.velocity.y * deltaTime;
+      this.life -= deltaTime * 3;
+      this.material.opacity = this.life;
+
+      if (this.life <= 0) {
+        scene.remove(this.mesh);
+        const index = particles.indexOf(this);
+        if (index > -1) particles.splice(index, 1);
+      }
+    }
+  }
+
+  function createRocket(playerId, color = 0xff6b6b) {
+    const rocket = new THREE.Group();
+
+    // Rocket body
+    const bodyGeometry = new THREE.BufferGeometry();
+    const bodyVertices = new Float32Array([
+      0, 0.8, 0,      // top
+      -0.3, -0.5, 0,  // bottom left
+      0.3, -0.5, 0,   // bottom right
+    ]);
+    bodyGeometry.setAttribute('position', new THREE.BufferAttribute(bodyVertices, 3));
+    const bodyMaterial = new THREE.MeshBasicMaterial({ color: color });
+    const rocketBody = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    rocket.add(rocketBody);
+
+    // Rocket fins
+    const finGeometry = new THREE.PlaneGeometry(0.2, 0.3);
+    const finMaterial = new THREE.MeshBasicMaterial({ color: 0x4ecdc4 });
+    const leftFin = new THREE.Mesh(finGeometry, finMaterial);
+    leftFin.position.set(-0.25, -0.3, 0);
+    rocket.add(leftFin);
+    const rightFin = new THREE.Mesh(finGeometry, finMaterial);
+    rightFin.position.set(0.25, -0.3, 0);
+    rocket.add(rightFin);
+
+    scene.add(rocket);
+    rockets[playerId] = rocket;
+    return rocket;
+  }
+
+  function createTerrain(terrainData) {
+    // Remove existing terrain
+    if (terrain) scene.remove(terrain);
+    if (landingPad) scene.remove(landingPad);
+    if (leftMarker) scene.remove(leftMarker);
+    if (rightMarker) scene.remove(rightMarker);
+
+    terrainPoints = terrainData.points;
+    padX = terrainData.landingPad.x;
+    padY = terrainData.landingPad.y;
+    padWidth = terrainData.landingPad.width;
+
+    // Create terrain mesh
+    const terrainShape = new THREE.Shape();
+    terrainShape.moveTo(terrainPoints[0].x, terrainPoints[0].y);
+    for (let i = 1; i < terrainPoints.length; i++) {
+      terrainShape.lineTo(terrainPoints[i].x, terrainPoints[i].y);
+    }
+    terrainShape.lineTo(20, -15);
+    terrainShape.lineTo(-20, -15);
+    terrainShape.closePath();
+
+    const terrainGeometry = new THREE.ShapeGeometry(terrainShape);
+    const terrainMaterial = new THREE.MeshBasicMaterial({ color: 0x95a99c });
+    terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
+    scene.add(terrain);
+
+    // Create landing pad
+    const padGeometry = new THREE.PlaneGeometry(padWidth, 0.2);
+    const padMaterial = new THREE.MeshBasicMaterial({ color: 0xffd60a });
+    landingPad = new THREE.Mesh(padGeometry, padMaterial);
+    landingPad.position.set(padX, padY, 0.1);
+    scene.add(landingPad);
+
+    // Add landing pad markers
+    const markerGeometry = new THREE.PlaneGeometry(0.1, 0.5);
+    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    leftMarker = new THREE.Mesh(markerGeometry, markerMaterial);
+    leftMarker.position.set(padX - padWidth/2, padY + 0.3, 0.1);
+    scene.add(leftMarker);
+    rightMarker = new THREE.Mesh(markerGeometry, markerMaterial);
+    rightMarker.position.set(padX + padWidth/2, padY + 0.3, 0.1);
+    scene.add(rightMarker);
+  }
+
+  function updatePlayerList() {
+    const playersDiv = document.getElementById('players');
+    playersDiv.innerHTML = '';
+    
+    Object.values(allPlayers).forEach(player => {
+      const playerDiv = document.createElement('div');
+      playerDiv.innerHTML = `
+        <span style="color: ${player.color}">●</span> 
+        Player ${player.id.substr(0, 6)}
+        ${player.gameOver ? (player.won ? ' 🏆' : ' 💥') : ''}
+      `;
+      playersDiv.appendChild(playerDiv);
+    });
+  }
+
+  function checkCollision() {
+    const rocketBottom = myGameState.position.y - 0.5;
+
+    // Check landing pad
+    if (Math.abs(myGameState.position.x - padX) < padWidth/2 &&
+            rocketBottom <= padY + 0.1 && rocketBottom >= padY - 0.1) {
+
+      const speed = Math.sqrt(myGameState.velocity.x ** 2 + myGameState.velocity.y ** 2);
+      if (speed < 2 && Math.abs(myGameState.rotation) < 0.2) {
+        myGameState.won = true;
+        myGameState.gameOver = true;
+        showMessage("PERFECT LANDING!<br>Press SPACE to restart");
+      } else {
+        myGameState.gameOver = true;
+        showMessage("TOO FAST!<br>Press SPACE to restart");
+        createExplosion();
+      }
+      return true;
+    }
+
+    // Check terrain collision
+    for (let i = 0; i < terrainPoints.length - 1; i++) {
+      const p1 = terrainPoints[i];
+      const p2 = terrainPoints[i + 1];
+
+      if (myGameState.position.x >= p1.x && myGameState.position.x <= p2.x) {
+        const t = (myGameState.position.x - p1.x) / (p2.x - p1.x);
+        const terrainY = p1.y + t * (p2.y - p1.y);
+
+        if (rocketBottom <= terrainY) {
+          myGameState.gameOver = true;
+          showMessage("CRASH!<br>Press SPACE to restart");
+          createExplosion();
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  function createExplosion() {
+    for (let i = 0; i < 30; i++) {
+      const angle = (Math.PI * 2 * i) / 30;
+      const speed = Math.random() * 5 + 2;
+      new Particle(
+              myGameState.position.x,
+              myGameState.position.y,
+              Math.cos(angle) * speed,
+              Math.sin(angle) * speed,
+              0xff0000
+      );
+    }
+  }
+
+  function showMessage(text) {
+    const messageEl = document.getElementById('message');
+    messageEl.innerHTML = text;
+    messageEl.style.display = 'block';
+  }
+
+  function hideMessage() {
+    document.getElementById('message').style.display = 'none';
+  }
+
+  function resetMyPlayer() {
+    myGameState = {
+      position: { x: (Math.random() - 0.5) * 10, y: 5 },
+      velocity: { x: (Math.random() - 0.5) * 2, y: 0 },
+      rotation: 0,
+      fuel: 100,
+      gameOver: false,
+      won: false
+    };
+    hideMessage();
+    particles.forEach(p => scene.remove(p.mesh));
+    particles.length = 0;
+    socket.emit('restartGame');
+  }
+
+  function update(deltaTime) {
+    if (myGameState.gameOver) {
+      if (keys[' '] || keys['Enter']) {
+        resetMyPlayer();
+      }
+      return;
+    }
+
+    // Handle input for my player only
+    if ((keys['ArrowLeft'] || keys['a'] || touchControls.left) && myGameState.fuel > 0) {
+      myGameState.rotation += deltaTime * 3;  // A key rotates counter-clockwise
+      myGameState.fuel -= deltaTime * 5;
+    }
+    if ((keys['ArrowRight'] || keys['d'] || touchControls.right) && myGameState.fuel > 0) {
+      myGameState.rotation -= deltaTime * 3;  // D key rotates clockwise
+      myGameState.fuel -= deltaTime * 5;
+    }
+    if ((keys['ArrowUp'] || keys['w'] || keys[' '] || touchControls.thrust) && myGameState.fuel > 0) {
+      const thrust = 8;
+      myGameState.velocity.x -= Math.sin(myGameState.rotation) * thrust * deltaTime;
+      myGameState.velocity.y += Math.cos(myGameState.rotation) * thrust * deltaTime;
+      myGameState.fuel -= deltaTime * 20;
+
+      // Create thrust particles
+      if (Math.random() < 0.8) {
+        const spreadAngle = (Math.random() - 0.5) * 0.5;
+        const player = allPlayers[myPlayerId];
+        const color = player ? parseInt(player.color.replace('#', '0x')) : 0xff6b00;
+        new Particle(
+                myGameState.position.x + Math.sin(myGameState.rotation) * 0.5,
+                myGameState.position.y - Math.cos(myGameState.rotation) * 0.5,
+                Math.sin(myGameState.rotation + spreadAngle) * 3,
+                -Math.cos(myGameState.rotation + spreadAngle) * 3,
+                color
+        );
+      }
+    }
+
+    // Apply gravity
+    myGameState.velocity.y -= 2 * deltaTime;
+
+    // Update position
+    myGameState.position.x += myGameState.velocity.x * deltaTime;
+    myGameState.position.y += myGameState.velocity.y * deltaTime;
+
+    // Screen wrapping
+    const screenBounds = frustumSize * aspect / 2;
+    if (myGameState.position.x > screenBounds) {
+      myGameState.position.x = -screenBounds;
+    } else if (myGameState.position.x < -screenBounds) {
+      myGameState.position.x = screenBounds;
+    }
+
+    // Clamp fuel
+    myGameState.fuel = Math.max(0, myGameState.fuel);
+
+    // Check if rocket is too high or too low
+    if (myGameState.position.y > 15) {
+      myGameState.position.y = 15;
+      myGameState.velocity.y = Math.min(myGameState.velocity.y, 0);
+    } else if (myGameState.position.y < -10) {
+      myGameState.gameOver = true;
+      showMessage("CRASHED!<br>Press SPACE to restart");
+    }
+
+    // Check collision
+    checkCollision();
+
+    // Update UI
+    document.getElementById('fuel').textContent = Math.round(myGameState.fuel);
+    const speed = Math.sqrt(myGameState.velocity.x ** 2 + myGameState.velocity.y ** 2);
+    document.getElementById('velocity').textContent = speed.toFixed(1);
+    document.getElementById('altitude').textContent = Math.max(0, myGameState.position.y - padY).toFixed(1);
+
+    // Update particles
+    particles.forEach(p => p.update(deltaTime));
+
+    // Send my state to server
+    socket.emit('playerUpdate', myGameState);
+  }
+
+  // Socket events
+  socket.on('connect', () => {
+    document.getElementById('connectionStatus').textContent = 'Connected';
+    document.getElementById('connectionStatus').style.color = '#0f0';
+  });
+
+  socket.on('disconnect', () => {
+    document.getElementById('connectionStatus').textContent = 'Disconnected';
+    document.getElementById('connectionStatus').style.color = '#f00';
+  });
+
+  socket.on('gameState', (data) => {
+    myPlayerId = data.yourId;
+    allPlayers = data.players;
+    
+    // Create terrain
+    createTerrain(data.terrain);
+    
+    // Create rockets for all players
+    Object.keys(data.players).forEach(playerId => {
+      const player = data.players[playerId];
+      if (!rockets[playerId]) {
+        createRocket(playerId, player.color);
+      }
+    });
+    
+    // Set my game state
+    if (allPlayers[myPlayerId]) {
+      myGameState = { ...allPlayers[myPlayerId] };
+    }
+    
+    updatePlayerList();
+    gameInitialized = true;
+  });
+
+  socket.on('playerJoined', (player) => {
+    allPlayers[player.id] = player;
+    if (!rockets[player.id]) {
+      createRocket(player.id, player.color);
+    }
+    updatePlayerList();
+  });
+
+  socket.on('playerLeft', (playerId) => {
+    if (rockets[playerId]) {
+      scene.remove(rockets[playerId]);
+      delete rockets[playerId];
+    }
+    delete allPlayers[playerId];
+    updatePlayerList();
+  });
+
+  socket.on('playerUpdate', (data) => {
+    if (allPlayers[data.playerId]) {
+      allPlayers[data.playerId] = { ...allPlayers[data.playerId], ...data };
+    }
+    updatePlayerList();
+  });
+
+  socket.on('playerRestart', (playerId) => {
+    if (allPlayers[playerId]) {
+      allPlayers[playerId].gameOver = false;
+      allPlayers[playerId].won = false;
+    }
+    updatePlayerList();
+  });
+
+  socket.on('newLevel', (data) => {
+    createTerrain(data.terrain);
+    allPlayers = data.players;
+    
+    // Ensure all rockets exist for all players
+    Object.keys(allPlayers).forEach(playerId => {
+      const player = allPlayers[playerId];
+      if (!rockets[playerId]) {
+        createRocket(playerId, player.color);
+      }
+    });
+    
+    if (allPlayers[myPlayerId]) {
+      myGameState = { ...allPlayers[myPlayerId] };
+    }
+    
+    hideMessage();
+    particles.forEach(p => scene.remove(p.mesh));
+    particles.length = 0;
+    updatePlayerList();
+  });
+
+  // Event listeners
+  window.addEventListener('keydown', (e) => {
+    keys[e.key] = true;
+    if (e.key === ' ') e.preventDefault();
+  });
+
+  window.addEventListener('keyup', (e) => {
+    keys[e.key] = false;
+  });
+
+  // Mobile controls
+  document.getElementById('leftBtn').addEventListener('touchstart', () => touchControls.left = true);
+  document.getElementById('leftBtn').addEventListener('touchend', () => touchControls.left = false);
+  document.getElementById('rightBtn').addEventListener('touchstart', () => touchControls.right = true);
+  document.getElementById('rightBtn').addEventListener('touchend', () => touchControls.right = false);
+  document.getElementById('thrustBtn').addEventListener('touchstart', () => touchControls.thrust = true);
+  document.getElementById('thrustBtn').addEventListener('touchend', () => touchControls.thrust = false);
+
+  // Mouse controls for desktop
+  document.getElementById('leftBtn').addEventListener('mousedown', () => touchControls.left = true);
+  document.getElementById('leftBtn').addEventListener('mouseup', () => touchControls.left = false);
+  document.getElementById('rightBtn').addEventListener('mousedown', () => touchControls.right = true);
+  document.getElementById('rightBtn').addEventListener('mouseup', () => touchControls.right = false);
+  document.getElementById('thrustBtn').addEventListener('mousedown', () => touchControls.thrust = true);
+  document.getElementById('thrustBtn').addEventListener('mouseup', () => touchControls.thrust = false);
+
+  // New level button
+  document.getElementById('newLevelBtn').addEventListener('click', () => {
+    socket.emit('newLevel');
+  });
+
+  // Animation loop
+  let lastTime = 0;
+  function animate(currentTime) {
+    requestAnimationFrame(animate);
+
+    if (!gameInitialized) return;
+
+    const deltaTime = Math.min((currentTime - lastTime) / 1000, 0.1);
+    lastTime = currentTime;
+
+    update(deltaTime);
+
+    // Update all rocket positions
+    Object.keys(allPlayers).forEach(playerId => {
+      if (rockets[playerId]) {
+        if (playerId === myPlayerId) {
+          // Update my own rocket with my game state
+          rockets[playerId].position.set(myGameState.position.x, myGameState.position.y, 0);
+          rockets[playerId].rotation.z = myGameState.rotation;
+        } else if (allPlayers[playerId]) {
+          // Update other players' rockets with their states
+          const player = allPlayers[playerId];
+          rockets[playerId].position.set(player.position.x, player.position.y, 0);
+          rockets[playerId].rotation.z = player.rotation;
+        }
+      }
+    });
+
+    renderer.render(scene, camera);
+  }
+
+  // Handle resize
+  window.addEventListener('resize', () => {
+    const aspect = window.innerWidth / window.innerHeight;
+    camera.left = frustumSize * aspect / -2;
+    camera.right = frustumSize * aspect / 2;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // Start game
+  animate(0);
+</script>
+</body>
+</html>
