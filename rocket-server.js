@@ -114,6 +114,19 @@ io.on('connection', (socket) => {
       players: gameState.players
     });
   });
+  
+  socket.on('missileLaunched', (data) => {
+    // Broadcast missile launch to all other players
+    socket.broadcast.emit('missileLaunched', data);
+  });
+  
+  socket.on('missileHit', (data) => {
+    // Mark target as destroyed and broadcast to all
+    if (gameState.players[data.targetId]) {
+      gameState.players[data.targetId].gameOver = true;
+      io.emit('missileHit', data);
+    }
+  });
 
   socket.on('disconnect', () => {
     console.log('Player disconnected:', socket.id);

@@ -66,6 +66,18 @@
       background: rgba(0, 255, 255, 0.3);
       transform: scale(0.95);
     }
+    #missileBtn {
+      background: rgba(255, 100, 100, 0.1);
+      border-color: #ff6464;
+      color: #ff6464;
+    }
+    #missileBtn:active {
+      background: rgba(255, 100, 100, 0.3);
+    }
+    #missileBtn.cooldown {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
     #gameControls {
       position: absolute;
       bottom: 100px;
@@ -109,6 +121,22 @@
       font-size: 14px;
       text-shadow: 0 0 10px #0ff;
     }
+    #landingIndicator {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 40px;
+      color: #ffd60a;
+      text-shadow: 0 0 20px #ffd60a;
+      pointer-events: none;
+      display: none;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.3; }
+      50% { opacity: 1; }
+    }
     #restartBtn {
       position: absolute;
       top: 60%;
@@ -147,6 +175,8 @@
   <div>FUEL: <span id="fuel">100</span>%</div>
   <div>VELOCITY: <span id="velocity">0</span> m/s</div>
   <div>ALTITUDE: <span id="altitude">0</span> m</div>
+  <div>MISSILES: <span id="missileCount">3</span></div>
+  <div style="margin-top: 10px; font-size: 11px; opacity: 0.7;">Press M to launch missile</div>
 </div>
 <div id="playerList">
   <div><strong>PLAYERS:</strong></div>
@@ -157,12 +187,14 @@
   <div class="control-btn" id="leftBtn">◄</div>
   <div class="control-btn" id="thrustBtn">▲</div>
   <div class="control-btn" id="rightBtn">►</div>
+  <div class="control-btn" id="missileBtn">🚀</div>
 </div>
 <div id="gameControls">
   <div class="game-btn" id="newLevelBtn">NEW LEVEL</div>
 </div>
 <div id="message"></div>
 <button id="restartBtn">RESTART</button>
+<div id="landingIndicator"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
@@ -183,7 +215,7 @@
   scene.background = new THREE.Color(0x000814);
 
   // Camera setup
-  const aspect = window.innerWidth / window.innerHeight;
+  let aspect = window.innerWidth / window.innerHeight;
   const frustumSize = 20;
   const camera = new THREE.OrthographicCamera(
           frustumSize * aspect / -2,
@@ -194,6 +226,106 @@
           1000
   );
   camera.position.z = 10;
+  
+  // Camera follow settings for mobile
+  let isMobile = window.innerWidth < 768;
+  let cameraTarget = { x: 0, y: 0 };
+  const cameraSmoothing = 0.1;
+  
+  function updateCameraPosition(deltaTime) {
+    if (!isMobile || !myGameState) return;
+    
+    // Calculate the midpoint between rocket and landing pad
+    const rocketX = myGameState.position.x;
+    const rocketY = myGameState.position.y;
+    
+    // Focus on area between rocket and landing pad
+    let targetX, targetY;
+    
+    if (padX !== undefined && padY !== undefined) {
+      // Calculate weighted average - bias toward rocket position
+      const rocketWeight = 0.7;
+      const padWeight = 0.3;
+      
+      targetX = rocketX * rocketWeight + padX * padWeight;
+      targetY = rocketY * rocketWeight + padY * padWeight;
+      
+      // Ensure landing pad stays visible
+      const maxDistX = frustumSize * aspect / 3; // Keep pad within 1/3 of screen width
+      const maxDistY = frustumSize / 3; // Keep pad within 1/3 of screen height
+      
+      // Clamp camera to ensure pad visibility
+      if (Math.abs(padX - targetX) > maxDistX) {
+        targetX = padX + Math.sign(rocketX - padX) * maxDistX;
+      }
+      if (Math.abs(padY - targetY) > maxDistY) {
+        targetY = padY + Math.sign(rocketY - padY) * maxDistY;
+      }
+      
+      // Show landing pad indicator if it's far away
+      updateLandingIndicator(rocketX, rocketY, padX, padY);
+    } else {
+      // If no landing pad, just follow rocket
+      targetX = rocketX;
+      targetY = rocketY;
+    }
+    
+    // Smooth camera movement
+    cameraTarget.x += (targetX - cameraTarget.x) * cameraSmoothing;
+    cameraTarget.y += (targetY - cameraTarget.y) * cameraSmoothing;
+    
+    // Update camera position
+    camera.position.x = cameraTarget.x;
+    camera.position.y = cameraTarget.y;
+    
+    // Also move stars for parallax effect
+    if (stars) {
+      stars.position.x = cameraTarget.x * 0.1;
+      stars.position.y = cameraTarget.y * 0.1;
+    }
+  }
+  
+  function updateLandingIndicator(rocketX, rocketY, padX, padY) {
+    const indicator = document.getElementById('landingIndicator');
+    if (!indicator || !isMobile) return;
+    
+    // Calculate distance to landing pad
+    const dx = padX - rocketX;
+    const dy = padY - rocketY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    
+    // Show indicator if pad is far
+    if (distance > 8) {
+      // Calculate angle to pad
+      const angle = Math.atan2(dy, dx);
+      
+      // Convert to arrow emoji based on direction
+      let arrow = '';
+      const angleDeg = (angle * 180 / Math.PI + 360) % 360;
+      
+      if (angleDeg >= 337.5 || angleDeg < 22.5) arrow = '→';
+      else if (angleDeg >= 22.5 && angleDeg < 67.5) arrow = '↘';
+      else if (angleDeg >= 67.5 && angleDeg < 112.5) arrow = '↓';
+      else if (angleDeg >= 112.5 && angleDeg < 157.5) arrow = '↙';
+      else if (angleDeg >= 157.5 && angleDeg < 202.5) arrow = '←';
+      else if (angleDeg >= 202.5 && angleDeg < 247.5) arrow = '↖';
+      else if (angleDeg >= 247.5 && angleDeg < 292.5) arrow = '↑';
+      else if (angleDeg >= 292.5 && angleDeg < 337.5) arrow = '↗';
+      
+      indicator.textContent = arrow;
+      indicator.style.display = 'block';
+      
+      // Position indicator at edge of screen
+      const edgeDist = 100; // pixels from edge
+      const indicatorX = 50 + Math.cos(angle) * 30;
+      const indicatorY = 50 - Math.sin(angle) * 30;
+      
+      indicator.style.left = indicatorX + '%';
+      indicator.style.top = indicatorY + '%';
+    } else {
+      indicator.style.display = 'none';
+    }
+  }
 
   // Add stars background
   const starsGeometry = new THREE.BufferGeometry();
@@ -224,12 +356,17 @@
     rotation: 0,
     fuel: 100,
     gameOver: false,
-    won: false
+    won: false,
+    missiles: 3,
+    missileCooldown: 0
   };
 
   // Controls
   const keys = {};
   let touchControls = { left: false, right: false, thrust: false };
+  
+  // Missiles array
+  const missiles = [];
 
   // Particle system for thrust
   const particles = [];
@@ -259,6 +396,188 @@
         const index = particles.indexOf(this);
         if (index > -1) particles.splice(index, 1);
       }
+    }
+  }
+
+  // Missile class
+  class Missile {
+    constructor(x, y, targetPlayerId, ownerId) {
+      this.position = { x, y };
+      this.velocity = { x: 0, y: 0 };
+      this.targetPlayerId = targetPlayerId;
+      this.ownerId = ownerId;
+      this.speed = 10;
+      this.life = 5; // 5 seconds lifetime
+      this.turnRate = 5;
+      
+      // Create missile mesh
+      const missileGeometry = new THREE.ConeGeometry(0.15, 0.6, 6);
+      const missileMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0xff0000,
+        emissive: 0xff0000,
+        emissiveIntensity: 0.5
+      });
+      this.mesh = new THREE.Mesh(missileGeometry, missileMaterial);
+      this.mesh.position.set(x, y, 0.5);
+      scene.add(this.mesh);
+      
+      // Add trail effect
+      this.trailParticles = [];
+      
+      missiles.push(this);
+    }
+    
+    update(deltaTime) {
+      this.life -= deltaTime;
+      
+      // Remove if expired
+      if (this.life <= 0) {
+        this.destroy();
+        return;
+      }
+      
+      // Find target
+      const target = allPlayers[this.targetPlayerId];
+      if (!target || target.gameOver) {
+        // Find new target if current one is gone
+        this.findNewTarget();
+      }
+      
+      if (this.targetPlayerId && allPlayers[this.targetPlayerId]) {
+        const target = allPlayers[this.targetPlayerId];
+        
+        // Calculate direction to target
+        const dx = target.position.x - this.position.x;
+        const dy = target.position.y - this.position.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Check for hit
+        if (distance < 0.5) {
+          // Hit target!
+          this.explode();
+          
+          // If it's my missile hitting someone
+          if (this.ownerId === myPlayerId && this.targetPlayerId !== myPlayerId) {
+            socket.emit('missileHit', { 
+              targetId: this.targetPlayerId,
+              attackerId: this.ownerId 
+            });
+          }
+          
+          // If I'm the target
+          if (this.targetPlayerId === myPlayerId && !myGameState.gameOver) {
+            myGameState.gameOver = true;
+            const message = window.innerWidth < 768 ? "MISSILE HIT!" : "MISSILE HIT!<br>Press SPACE to restart";
+            showMessage(message);
+            createExplosion();
+            socket.emit('playerUpdate', myGameState);
+          }
+          
+          return;
+        }
+        
+        // Update velocity to track target
+        const angle = Math.atan2(dy, dx);
+        const currentAngle = Math.atan2(this.velocity.y, this.velocity.x);
+        
+        // Smooth turning
+        let angleDiff = angle - currentAngle;
+        while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+        while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+        
+        const newAngle = currentAngle + Math.sign(angleDiff) * Math.min(Math.abs(angleDiff), this.turnRate * deltaTime);
+        
+        this.velocity.x = Math.cos(newAngle) * this.speed;
+        this.velocity.y = Math.sin(newAngle) * this.speed;
+      } else {
+        // No target, fly straight
+        if (this.velocity.x === 0 && this.velocity.y === 0) {
+          this.velocity.y = this.speed;
+        }
+      }
+      
+      // Update position
+      this.position.x += this.velocity.x * deltaTime;
+      this.position.y += this.velocity.y * deltaTime;
+      
+      // Update mesh
+      this.mesh.position.set(this.position.x, this.position.y, 0.5);
+      const angle = Math.atan2(this.velocity.y, this.velocity.x);
+      this.mesh.rotation.z = angle - Math.PI/2;
+      
+      // Create trail
+      if (Math.random() < 0.8) {
+        new Particle(
+          this.position.x - Math.cos(angle) * 0.3,
+          this.position.y - Math.sin(angle) * 0.3,
+          (Math.random() - 0.5) * 2,
+          (Math.random() - 0.5) * 2 - 1,
+          0xffaa00
+        );
+      }
+      
+      // Check terrain collision
+      for (let i = 0; i < terrainPoints.length - 1; i++) {
+        const p1 = terrainPoints[i];
+        const p2 = terrainPoints[i + 1];
+        
+        if (this.position.x >= p1.x && this.position.x <= p2.x) {
+          const t = (this.position.x - p1.x) / (p2.x - p1.x);
+          const terrainY = p1.y + t * (p2.y - p1.y);
+          
+          if (this.position.y - 0.3 <= terrainY) {
+            this.explode();
+            return;
+          }
+        }
+      }
+      
+      // Remove if out of bounds
+      if (Math.abs(this.position.x) > 25 || this.position.y > 20 || this.position.y < -15) {
+        this.destroy();
+      }
+    }
+    
+    findNewTarget() {
+      let closestDistance = Infinity;
+      let newTarget = null;
+      
+      Object.keys(allPlayers).forEach(playerId => {
+        if (playerId !== this.ownerId && !allPlayers[playerId].gameOver) {
+          const dx = this.position.x - allPlayers[playerId].position.x;
+          const dy = this.position.y - allPlayers[playerId].position.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          if (distance < closestDistance) {
+            closestDistance = distance;
+            newTarget = playerId;
+          }
+        }
+      });
+      
+      this.targetPlayerId = newTarget;
+    }
+    
+    explode() {
+      // Create explosion effect
+      for (let i = 0; i < 20; i++) {
+        const angle = (Math.PI * 2 * i) / 20;
+        const speed = Math.random() * 8 + 4;
+        new Particle(
+          this.position.x,
+          this.position.y,
+          Math.cos(angle) * speed,
+          Math.sin(angle) * speed,
+          0xff0000
+        );
+      }
+      this.destroy();
+    }
+    
+    destroy() {
+      scene.remove(this.mesh);
+      const index = missiles.indexOf(this);
+      if (index > -1) missiles.splice(index, 1);
     }
   }
 
@@ -459,12 +778,70 @@
       rotation: 0,
       fuel: 100,
       gameOver: false,
-      won: false
+      won: false,
+      missiles: 3,
+      missileCooldown: 0
     };
     hideMessage();
     particles.forEach(p => scene.remove(p.mesh));
     particles.length = 0;
+    
+    // Clear my missiles
+    missiles.forEach(m => {
+      if (m.ownerId === myPlayerId) {
+        m.destroy();
+      }
+    });
+    
     socket.emit('restartGame');
+  }
+  
+  function launchMissile() {
+    if (myGameState.gameOver || myGameState.missiles <= 0 || myGameState.missileCooldown > 0) {
+      return;
+    }
+    
+    // Find closest enemy
+    let closestDistance = Infinity;
+    let targetId = null;
+    
+    Object.keys(allPlayers).forEach(playerId => {
+      if (playerId !== myPlayerId && !allPlayers[playerId].gameOver) {
+        const dx = myGameState.position.x - allPlayers[playerId].position.x;
+        const dy = myGameState.position.y - allPlayers[playerId].position.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          targetId = playerId;
+        }
+      }
+    });
+    
+    if (targetId) {
+      // Launch missile
+      new Missile(
+        myGameState.position.x,
+        myGameState.position.y - 0.5,
+        targetId,
+        myPlayerId
+      );
+      
+      myGameState.missiles--;
+      myGameState.missileCooldown = 3; // 3 second cooldown
+      
+      // Notify server
+      socket.emit('missileLaunched', {
+        from: myPlayerId,
+        target: targetId,
+        position: { x: myGameState.position.x, y: myGameState.position.y - 0.5 }
+      });
+      
+      // Update button visual
+      const missileBtn = document.getElementById('missileBtn');
+      missileBtn.classList.add('cooldown');
+      missileBtn.textContent = myGameState.missiles;
+    }
   }
 
   function update(deltaTime) {
@@ -473,6 +850,24 @@
         resetMyPlayer();
       }
       return;
+    }
+    
+    // Update missile cooldown
+    if (myGameState.missileCooldown > 0) {
+      myGameState.missileCooldown -= deltaTime;
+      if (myGameState.missileCooldown <= 0) {
+        myGameState.missileCooldown = 0;
+        const missileBtn = document.getElementById('missileBtn');
+        missileBtn.classList.remove('cooldown');
+        missileBtn.textContent = myGameState.missiles > 0 ? '🚀' : '0';
+      }
+    }
+    
+    // Launch missile on key press
+    if (keys['m'] || keys['M']) {
+      launchMissile();
+      keys['m'] = false;
+      keys['M'] = false;
     }
 
     // Handle input for my player only
@@ -541,9 +936,13 @@
     const speed = Math.sqrt(myGameState.velocity.x ** 2 + myGameState.velocity.y ** 2);
     document.getElementById('velocity').textContent = speed.toFixed(1);
     document.getElementById('altitude').textContent = Math.max(0, myGameState.position.y - padY).toFixed(1);
+    document.getElementById('missileCount').textContent = myGameState.missiles;
 
     // Update particles
     particles.forEach(p => p.update(deltaTime));
+    
+    // Update missiles
+    missiles.forEach(m => m.update(deltaTime));
 
     // Update all rocket positions and check for proximity warnings
     Object.keys(allPlayers).forEach(playerId => {
@@ -598,6 +997,9 @@
 
     // Send my state to server
     socket.emit('playerUpdate', myGameState);
+    
+    // Update camera position for mobile
+    updateCameraPosition(deltaTime);
   }
 
   // Socket events
@@ -686,7 +1088,28 @@
     hideMessage();
     particles.forEach(p => scene.remove(p.mesh));
     particles.length = 0;
+    
+    // Clear all missiles
+    missiles.forEach(m => m.destroy());
+    
     updatePlayerList();
+  });
+  
+  // Missile events
+  socket.on('missileLaunched', (data) => {
+    if (data.from !== myPlayerId) {
+      // Create missile from other player
+      new Missile(data.position.x, data.position.y, data.target, data.from);
+    }
+  });
+  
+  socket.on('missileHit', (data) => {
+    if (data.targetId === myPlayerId && !myGameState.gameOver) {
+      myGameState.gameOver = true;
+      const message = window.innerWidth < 768 ? "MISSILE HIT!" : "MISSILE HIT!<br>Press SPACE to restart";
+      showMessage(message);
+      createExplosion();
+    }
   });
 
   // Event listeners
@@ -721,6 +1144,13 @@
     e.preventDefault();
     resetMyPlayer();
   });
+  
+  // Missile button
+  document.getElementById('missileBtn').addEventListener('click', launchMissile);
+  document.getElementById('missileBtn').addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    launchMissile();
+  });
 
   // New level button
   document.getElementById('newLevelBtn').addEventListener('click', () => {
@@ -744,7 +1174,8 @@
 
   // Handle resize
   window.addEventListener('resize', () => {
-    const aspect = window.innerWidth / window.innerHeight;
+    aspect = window.innerWidth / window.innerHeight;
+    isMobile = window.innerWidth < 768;
     camera.left = frustumSize * aspect / -2;
     camera.right = frustumSize * aspect / 2;
     camera.updateProjectionMatrix();
